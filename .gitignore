@@ -1,0 +1,84 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+.log
+# Streamlit specific cache and logs
+.streamlit/config.toml
+.streamlit/secrets.toml
+.streamlit/*.log
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+.idea/
+*.egg-info/
+.env
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Pytest
+.pytest_cache/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# VSCode
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Log files
+*.log
+
+# Environment variables
+.env
+.env.*
+
+# Local db or data files
+*.sqlite3
+*.db
+*.csv
+*.tsv
+*.bak
+*.json
+*.xlsx
+*.xls
+*.pkl
+*.pyc
+
+# Python bytecode cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
