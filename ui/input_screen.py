@@ -2,11 +2,10 @@ import time
 import streamlit as st
 from core.slide_generator import SlideGenerator
 
-def input_selection_screen():
+def inputselectionscreen():
     """Display the input selection screen for topic input."""
     st.header("Input Selection")
     
-    # Text input for lecture topic
     st.session_state.topic = st.text_input("Lecture Topic", value=st.session_state.topic)
     
     # Two columns for selecting delivery medium and complexity level
