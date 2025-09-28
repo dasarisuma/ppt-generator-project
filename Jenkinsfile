@@ -40,26 +40,47 @@ pipeline {
 
         stage('Setup System Dependencies') {
             steps {
-                echo "Setting up system dependencies..."
+                echo "Setting up system dependencies for Docker container..."
                 script {
                     if (isUnix()) {
                         sh '''
-                            echo "Checking Python installation..."
-                            python3 --version || python --version || echo "Python not found"
+                            echo "=== Python Environment Check ==="
+                            python3 --version || echo "Python3 not found"
+                            python3 -m pip --version || echo "Pip not found"
                             
-                            echo "Checking if we need to install python3-venv..."
-                            if ! python3 -m venv --help >/dev/null 2>&1; then
-                                echo "Installing python3-venv..."
-                                apt-get update -qq || yum update -y -q || echo "Package manager update failed"
-                                apt-get install -y python3-venv python3-pip || yum install -y python3-venv python3-pip || echo "Package installation attempted"
+                            echo "=== Installing Required System Packages ==="
+                            # Check if we have root/sudo access
+                            if command -v apt-get >/dev/null 2>&1; then
+                                echo "Using apt package manager..."
+                                # Try to install without sudo first (might work in Docker)
+                                apt-get update -qq >/dev/null 2>&1 || echo "apt update failed (might need root)"
+                                apt-get install -y python3-venv python3-full python3-pip >/dev/null 2>&1 || echo "apt install attempted"
+                                
+                                # If that fails, try with sudo
+                                if ! python3 -m venv --help >/dev/null 2>&1; then
+                                    echo "Trying with sudo..."
+                                    sudo apt-get update -qq >/dev/null 2>&1 || echo "sudo apt update failed"
+                                    sudo apt-get install -y python3-venv python3-full python3-pip >/dev/null 2>&1 || echo "sudo apt install attempted"
+                                fi
+                            elif command -v yum >/dev/null 2>&1; then
+                                echo "Using yum package manager..."
+                                yum update -y -q >/dev/null 2>&1 || echo "yum update failed"
+                                yum install -y python3-venv python3-pip >/dev/null 2>&1 || echo "yum install attempted"
+                            elif command -v apk >/dev/null 2>&1; then
+                                echo "Using apk package manager (Alpine)..."
+                                apk update >/dev/null 2>&1 || echo "apk update failed"
+                                apk add python3-dev py3-pip py3-venv >/dev/null 2>&1 || echo "apk install attempted"
+                            else
+                                echo "No known package manager found"
                             fi
                             
-                            echo "Checking pip availability..."
-                            python3 -m pip --version || curl https://bootstrap.pypa.io/get-pip.py | python3 || echo "Pip setup attempted"
+                            echo "=== Post-Install Verification ==="
+                            python3 -m venv --help >/dev/null 2>&1 && echo "✓ venv is available" || echo "✗ venv still not available"
+                            python3 -m pip --version >/dev/null 2>&1 && echo "✓ pip is available" || echo "✗ pip not available"
                         '''
                     } else {
                         bat '''
-                            echo "Windows environment detected"
+                            echo "Windows environment detected - system packages should be available"
                             python --version || echo "Python not found"
                             pip --version || echo "Pip not found" 
                         '''
@@ -93,42 +114,54 @@ pipeline {
                         sh '''
                             cd "${AUTOPR_DIR}/backend"
                             echo "Current directory: $(pwd)"
-                            echo "Available Python commands:"
-                            which python3 || echo "python3 not in PATH"
-                            which python || echo "python not in PATH"
+                            echo "Requirements file check:"
+                            ls -la requirements.txt || echo "requirements.txt not found"
                             
-                            # Try different methods to create virtual environment
-                            echo "Attempting to create virtual environment..."
-                            
-                            # Method 1: Use python3 -m venv (preferred)
-                            if python3 -m venv "${PYTHON_VENV}"; then
-                                echo "Virtual environment created with python3 -m venv"
+                            echo "=== Virtual Environment Setup ==="
+                            # Method 1: Try python3 -m venv after package installation
+                            if python3 -m venv "${PYTHON_VENV}" >/dev/null 2>&1; then
+                                echo "✓ Virtual environment created successfully with python3 -m venv"
+                                VENV_CREATED=true
                                 VENV_ACTIVATE="${PYTHON_VENV}/bin/activate"
-                            # Method 2: Use virtualenv if available
-                            elif command -v virtualenv >/dev/null 2>&1; then
-                                echo "Using virtualenv..."
-                                virtualenv "${PYTHON_VENV}"
-                                VENV_ACTIVATE="${PYTHON_VENV}/bin/activate"
-                            # Method 3: Install packages globally (fallback)
                             else
-                                echo "Virtual environment creation failed, installing packages globally"
-                                python3 -m pip install --user --upgrade pip
-                                python3 -m pip install --user -r requirements.txt
-                                VENV_ACTIVATE=""
+                                echo "✗ python3 -m venv failed"
+                                VENV_CREATED=false
                             fi
                             
-                            # Activate environment and install dependencies if venv was created
-                            if [ -n "$VENV_ACTIVATE" ] && [ -f "$VENV_ACTIVATE" ]; then
-                                echo "Activating virtual environment and installing dependencies..."
+                            # Method 2: Try virtualenv if available
+                            if [ "$VENV_CREATED" = false ] && command -v virtualenv >/dev/null 2>&1; then
+                                echo "Trying virtualenv..."
+                                if virtualenv "${PYTHON_VENV}" >/dev/null 2>&1; then
+                                    echo "✓ Virtual environment created with virtualenv"
+                                    VENV_CREATED=true
+                                    VENV_ACTIVATE="${PYTHON_VENV}/bin/activate"
+                                fi
+                            fi
+                            
+                            # Method 3: Use --break-system-packages as last resort
+                            if [ "$VENV_CREATED" = false ]; then
+                                echo "⚠️  Using --break-system-packages as fallback (Docker container safe)"
+                                python3 -m pip install --break-system-packages --upgrade pip
+                                python3 -m pip install --break-system-packages -r requirements.txt
+                                VENV_ACTIVATE=""
+                                echo "✓ Packages installed globally with --break-system-packages"
+                            fi
+                            
+                            # Install dependencies in virtual environment if created
+                            if [ "$VENV_CREATED" = true ] && [ -f "$VENV_ACTIVATE" ]; then
+                                echo "Installing dependencies in virtual environment..."
                                 . "$VENV_ACTIVATE"
                                 pip install --upgrade pip
                                 pip install -r requirements.txt
-                                echo "Dependencies installed in virtual environment"
-                            else
-                                echo "Using global Python installation"
+                                echo "✓ Dependencies installed in virtual environment"
                             fi
                             
-                            echo "Python environment setup completed"
+                            echo "=== Environment Setup Complete ==="
+                            if [ "$VENV_CREATED" = true ]; then
+                                echo "Using virtual environment at: ${PYTHON_VENV}"
+                            else
+                                echo "Using global Python installation with --break-system-packages"
+                            fi
                         '''
                     } else {
                         bat """
@@ -163,18 +196,24 @@ pipeline {
                             
                             # Determine Python command and activation
                             if [ -f "${PYTHON_VENV}/bin/activate" ]; then
-                                echo "Using virtual environment"
+                                echo "✓ Using virtual environment"
                                 . "${PYTHON_VENV}/bin/activate"
                                 PYTHON_CMD="python"
                             else
-                                echo "Using global Python installation"
+                                echo "✓ Using global Python installation"
                                 PYTHON_CMD="python3"
                             fi
                             
-                            echo "Using Python command: $PYTHON_CMD"
+                            echo "Python command: $PYTHON_CMD"
                             $PYTHON_CMD --version
                             
+                            # Verify dependencies are available
+                            echo "Checking key dependencies..."
+                            $PYTHON_CMD -c "import requests; print('✓ requests available')" || echo "✗ requests missing"
+                            $PYTHON_CMD -c "import json; print('✓ json available')" || echo "✗ json missing"
+                            
                             # Run the AI review
+                            echo "=== Starting AI Code Review ==="
                             if [ "${IS_PR}" = "true" ]; then
                                 echo "Running PR mode review..."
                                 $PYTHON_CMD scripts/run_review.py \\
@@ -199,6 +238,8 @@ pipeline {
                                     --output "${WORKSPACE}/ai-review-results.json" \\
                                     --project-root "${WORKSPACE}"
                             fi
+                            
+                            echo "=== AI Code Review Complete ==="
                         '''
                     } else {
                         bat """
@@ -269,14 +310,14 @@ pipeline {
                         }
                         
                         if (hasBlockingIssues) {
-                            echo "BLOCKING ISSUES FOUND!"
+                            echo "❌ BLOCKING ISSUES FOUND!"
                             echo "Found severities that are configured to fail the build: ${blockingSeverities.join(', ')}"
                             error("AI Code Review found blocking issues. Build failed.")
                         } else {
-                            echo "No blocking issues found. Build can proceed."
+                            echo "✅ No blocking issues found. Build can proceed."
                         }
                     } else {
-                        echo "WARNING: No review results file found."
+                        echo "⚠️ WARNING: No review results file found."
                         currentBuild.result = 'UNSTABLE'
                     }
                 }
@@ -292,40 +333,31 @@ pipeline {
                 script {
                     if (isUnix()) {
                         sh '''
-                            echo "Setting up PPT Generator environment..."
+                            echo "=== PPT Generator Build ==="
                             
                             # Try to create virtual environment for PPT generator
-                            if python3 -m venv ppt-venv; then
-                                echo "Virtual environment created for PPT generator"
+                            if python3 -m venv ppt-venv >/dev/null 2>&1; then
+                                echo "✓ Virtual environment created for PPT generator"
                                 . ppt-venv/bin/activate
                                 pip install --upgrade pip
-                            else
-                                echo "Using global Python for PPT generator"
-                                python3 -m pip install --user --upgrade pip
-                            fi
-                            
-                            # Install requirements
-                            if [ -f ppt-venv/bin/activate ]; then
-                                . ppt-venv/bin/activate
                                 pip install -r requirements.txt
+                                PYTHON_CMD="python"
                             else
-                                python3 -m pip install --user -r requirements.txt
+                                echo "⚠️ Using global Python with --break-system-packages for PPT generator"
+                                python3 -m pip install --break-system-packages --upgrade pip
+                                python3 -m pip install --break-system-packages -r requirements.txt
+                                PYTHON_CMD="python3"
                             fi
                             
                             # Run tests if they exist
                             if [ -f "test_app.py" ]; then
                                 echo "Running tests..."
-                                if [ -f ppt-venv/bin/activate ]; then
-                                    . ppt-venv/bin/activate
-                                    python -m pytest test_app.py -v || echo "Tests completed with issues"
-                                else
-                                    python3 -m pytest test_app.py -v || echo "Tests completed with issues"
-                                fi
+                                $PYTHON_CMD -m pytest test_app.py -v || echo "Tests completed with issues"
                             else
                                 echo "No tests found, skipping test execution"
                             fi
                             
-                            echo "Build completed successfully!"
+                            echo "✅ Build completed successfully!"
                         '''
                     } else {
                         bat """
@@ -364,11 +396,11 @@ pipeline {
                 try {
                     if (isUnix()) {
                         sh '''
-                            echo "Cleaning up directories..."
+                            echo "=== Cleanup ==="
                             rm -rf "${AUTOPR_DIR}" || echo "AutoPR cleanup done"
                             rm -rf "${PYTHON_VENV}" || echo "Python venv cleanup done"  
                             rm -rf "ppt-venv" || echo "PPT venv cleanup done"
-                            echo "Cleanup completed"
+                            echo "✓ Cleanup completed"
                         '''
                     } else {
                         bat """
@@ -389,32 +421,32 @@ pipeline {
         }
         
         success {
-            echo "SUCCESS: Pipeline completed successfully!"
-            echo "AI Code Review passed - no blocking issues found."
+            echo "🎉 SUCCESS: Pipeline completed successfully!"
+            echo "✅ AI Code Review passed - no blocking issues found."
         }
         
         failure {
-            echo "FAILURE: Pipeline failed!"
+            echo "❌ FAILURE: Pipeline failed!"
             script {
                 if (fileExists('ai-review-results.json')) {
                     def reviewResults = readJSON file: 'ai-review-results.json'
-                    echo "Failure likely due to AI code review findings:"
+                    echo "Failure due to AI code review findings:"
                     if (reviewResults.comments) {
                         for (comment in reviewResults.comments) {
                             def severity = comment.severity?.toLowerCase()
                             if (severity == 'critical' || severity == 'error') {
-                                echo "CRITICAL ISSUE: ${comment.file}:${comment.line} [${comment.severity}] ${comment.message}"
+                                echo "🚨 CRITICAL: ${comment.file}:${comment.line} [${comment.severity}] ${comment.message}"
                             }
                         }
                     }
                 } else {
-                    echo "Pipeline failed due to system error (not AI review)"
+                    echo "Pipeline failed due to system/environment error (not AI review)"
                 }
             }
         }
         
         unstable {
-            echo "UNSTABLE: Pipeline completed with warnings."
+            echo "⚠️ UNSTABLE: Pipeline completed with warnings."
             echo "Check the AI review results for non-blocking issues."
         }
     }
