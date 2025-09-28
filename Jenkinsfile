@@ -212,10 +212,14 @@ pipeline {
                             $PYTHON_CMD -c "import requests; print('✓ requests available')" || echo "✗ requests missing"
                             $PYTHON_CMD -c "import json; print('✓ json available')" || echo "✗ json missing"
                             
+                            # Add user local bin to PATH for packages installed with --break-system-packages
+                            export PATH="/var/jenkins_home/.local/bin:$PATH"
+                            
                             # Run the AI review
                             echo "=== Starting AI Code Review ==="
                             if [ "${IS_PR}" = "true" ]; then
                                 echo "Running PR mode review..."
+                                cd "${AUTOPR_DIR}/backend"
                                 $PYTHON_CMD scripts/run_review.py \\
                                     --pr-url "${PR_URL}" \\
                                     --github-token "${GITHUB_TOKEN}" \\
