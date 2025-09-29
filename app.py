@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import streamlit as st
-from ui.input_screen import inputselectionscreen
+from ui.input_screen import input_selection_screen
 from ui.structure_screen import slidestructure_screen
 from ui.content_screen import content_generation_screen
 from ui.download_screen import download_screen
@@ -76,7 +76,7 @@ with st.sidebar:
 
 # Main content area: render appropriate screen based on current stage
 if st.session_state.stage == "input":
-    inputselectionscreen()
+    input_selection_screen()
 elif st.session_state.stage == "structure":
     slidestructure_screen()
 elif st.session_state.stage == "content":

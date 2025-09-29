@@ -7,8 +7,8 @@ def inputselectionscreen():
     st.header("Input Selection")
     
     st.session_state.topic = st.text_input("Lecture Topic", value=st.session_state.topic)
-    
-    # Two columns for selecting delivery medium and complexity level
+    print("just simply")
+   
     col1, col2 = st.columns(2)
     with col1:
         st.session_state.delivery_medium = st.selectbox(
