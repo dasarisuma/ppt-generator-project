@@ -83,20 +83,20 @@ try:
         if '${params.PR_SELECTION_MODE}' == 'latest':
             # Get the most recently updated PR
             latest_pr = data[0]
-            print(f'LATEST_PR_NUMBER={latest_pr[\"number\"]}')
-            print(f'LATEST_PR_TITLE={latest_pr[\"title\"]}')
-            print(f'LATEST_PR_BRANCH={latest_pr[\"head\"][\"ref\"]}')
-            print(f'LATEST_PR_BASE={latest_pr[\"base\"][\"ref\"]}')
-            print(f'LATEST_PR_URL={latest_pr[\"html_url\"]}')
-            print(f'LATEST_PR_UPDATED={latest_pr[\"updated_at\"]}')
+            print(f'LATEST_PR_NUMBER={latest_pr[\\\"number\\\"]}')
+            print(f'LATEST_PR_TITLE={latest_pr[\\\"title\\\"]}')
+            print(f'LATEST_PR_BRANCH={latest_pr[\\\"head\\\"][\\\"ref\\\"]}')
+            print(f'LATEST_PR_BASE={latest_pr[\\\"base\\\"][\\\"ref\\\"]}')
+            print(f'LATEST_PR_URL={latest_pr[\\\"html_url\\\"]}')
+            print(f'LATEST_PR_UPDATED={latest_pr[\\\"updated_at\\\"]}')
         else:
             # Show all open PRs
             print('OPEN_PRS_COUNT=' + str(len(data)))
             for i, pr in enumerate(data[:5]):  # Show first 5 PRs
-                print(f'PR_{i+1}_NUMBER={pr[\"number\"]}')
-                print(f'PR_{i+1}_TITLE={pr[\"title\"]}')
-                print(f'PR_{i+1}_BRANCH={pr[\"head\"][\"ref\"]}')
-                print(f'PR_{i+1}_UPDATED={pr[\"updated_at\"]}')
+                print(f'PR_{i+1}_NUMBER={pr[\\\"number\\\"]}')
+                print(f'PR_{i+1}_TITLE={pr[\\\"title\\\"]}')
+                print(f'PR_{i+1}_BRANCH={pr[\\\"head\\\"][\\\"ref\\\"]}')
+                print(f'PR_{i+1}_UPDATED={pr[\\\"updated_at\\\"]}')
     else:
         print('NO_OPEN_PRS=true')
 except Exception as e:
@@ -120,19 +120,19 @@ try:
     if data and len(data) > 0:
         if '${params.PR_SELECTION_MODE}' == 'latest':
             latest_pr = data[0]
-            print(f'LATEST_PR_NUMBER={latest_pr[\"number\"]}')
-            print(f'LATEST_PR_TITLE={latest_pr[\"title\"]}')
-            print(f'LATEST_PR_BRANCH={latest_pr[\"head\"][\"ref\"]}')
-            print(f'LATEST_PR_BASE={latest_pr[\"base\"][\"ref\"]}')
-            print(f'LATEST_PR_URL={latest_pr[\"html_url\"]}')
-            print(f'LATEST_PR_UPDATED={latest_pr[\"updated_at\"]}')
+            print(f'LATEST_PR_NUMBER={latest_pr[\\\"number\\\"]}')
+            print(f'LATEST_PR_TITLE={latest_pr[\\\"title\\\"]}')
+            print(f'LATEST_PR_BRANCH={latest_pr[\\\"head\\\"][\\\"ref\\\"]}')
+            print(f'LATEST_PR_BASE={latest_pr[\\\"base\\\"][\\\"ref\\\"]}')
+            print(f'LATEST_PR_URL={latest_pr[\\\"html_url\\\"]}')
+            print(f'LATEST_PR_UPDATED={latest_pr[\\\"updated_at\\\"]}')
         else:
             print('OPEN_PRS_COUNT=' + str(len(data)))
             for i, pr in enumerate(data[:5]):
-                print(f'PR_{i+1}_NUMBER={pr[\"number\"]}')
-                print(f'PR_{i+1}_TITLE={pr[\"title\"]}')
-                print(f'PR_{i+1}_BRANCH={pr[\"head\"][\"ref\"]}')
-                print(f'PR_{i+1}_UPDATED={pr[\"updated_at\"]}')
+                print(f'PR_{i+1}_NUMBER={pr[\\\"number\\\"]}')
+                print(f'PR_{i+1}_TITLE={pr[\\\"title\\\"]}')
+                print(f'PR_{i+1}_BRANCH={pr[\\\"head\\\"][\\\"ref\\\"]}')
+                print(f'PR_{i+1}_UPDATED={pr[\\\"updated_at\\\"]}')
     else:
         print('NO_OPEN_PRS=true')
 except Exception as e:
