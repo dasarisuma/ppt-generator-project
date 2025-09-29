@@ -1,5 +1,5 @@
-// Scripted Pipeline for PPT Generator with AI Code Review
-// Compatible with older Jenkins versions
+// Final Working Jenkins Pipeline for PPT Generator with AI Code Review
+// Compatible with all Jenkins versions - No additional plugins required
 
 properties([
     buildDiscarder(logRotator(numToKeepStr: '15')),
@@ -239,39 +239,24 @@ node {
 
                 stage('Process Review Results') {
                     if (fileExists('ai-review-results.json')) {
-                        echo "Processing AI review results..."
-                        def reviewResults = readJSON file: 'ai-review-results.json'
+                        echo "✅ AI review completed successfully!"
                         
-                        def severities = []
-                        if (reviewResults.comments) {
-                            for (comment in reviewResults.comments) {
-                                def severity = comment.severity ?: ''
-                                severities.add(severity.toLowerCase())
-                            }
-                        }
+                        // Read and display results without JSON parsing
+                        def reviewContent = readFile('ai-review-results.json')
+                        echo "=== AI CODE REVIEW RESULTS ==="
+                        echo reviewContent
                         
-                        def blockingSeverities = []
+                        // Simple text-based check for blocking issues
                         def failOnParam = params.FAIL_ON.toLowerCase()
-                        def parts = failOnParam.split(',')
-                        for (part in parts) {
-                            blockingSeverities.add(part.trim())
-                        }
+                        def blockingSeverities = failOnParam.split(',').collect { it.trim() }
                         
                         def hasBlockingIssues = false
-                        for (severity in severities) {
-                            if (blockingSeverities.contains(severity)) {
+                        for (severity in blockingSeverities) {
+                            if (reviewContent.toLowerCase().contains("\"severity\": \"${severity}\"") || 
+                                reviewContent.toLowerCase().contains("\"severity\":\"${severity}\"")) {
                                 hasBlockingIssues = true
+                                echo "⚠️ Found blocking severity: ${severity}"
                                 break
-                            }
-                        }
-                        
-                        echo "=== AI CODE REVIEW SUMMARY ==="
-                        echo "Total comments: ${reviewResults.comments?.size() ?: 0}"
-                        echo "Summary: ${reviewResults.summary ?: 'No summary available'}"
-                        
-                        if (reviewResults.comments) {
-                            for (comment in reviewResults.comments) {
-                                echo "[${comment.severity?.toUpperCase()}] ${comment.file}:${comment.line} - ${comment.message}"
                             }
                         }
                         
@@ -374,9 +359,11 @@ node {
                 echo "Cleanup completed with minor issues: ${cleanupError.getMessage()}"
             }
             
-            // Archive artifacts
+            // Archive artifacts (simple version without fingerprinting)
             try {
-                archiveArtifacts artifacts: 'ai-review-results.json', allowEmptyArchive: true, fingerprint: true
+                if (fileExists('ai-review-results.json')) {
+                    archiveArtifacts artifacts: 'ai-review-results.json', allowEmptyArchive: true
+                }
             } catch (Exception archiveError) {
                 echo "Could not archive artifacts: ${archiveError.getMessage()}"
             }
@@ -389,18 +376,11 @@ node {
                 echo "❌ FAILURE: Pipeline failed!"
                 if (fileExists('ai-review-results.json')) {
                     try {
-                        def reviewResults = readJSON file: 'ai-review-results.json'
+                        def reviewContent = readFile('ai-review-results.json')
                         echo "Failure due to AI code review findings:"
-                        if (reviewResults.comments) {
-                            for (comment in reviewResults.comments) {
-                                def severity = comment.severity?.toLowerCase()
-                                if (severity == 'critical' || severity == 'error') {
-                                    echo "🚨 CRITICAL: ${comment.file}:${comment.line} [${comment.severity}] ${comment.message}"
-                                }
-                            }
-                        }
+                        echo reviewContent
                     } catch (Exception e) {
-                        echo "Could not process review results for failure analysis"
+                        echo "Could not process review results for failure analysis: ${e.getMessage()}"
                     }
                 } else {
                     echo "Pipeline failed due to system/environment error (not AI review)"
