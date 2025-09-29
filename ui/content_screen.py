@@ -3,7 +3,7 @@ import streamlit as st
 from core.slide_generator import SlideGenerator
 
 def content_generation_screen():
-    """Display the content generation results and allow user to review before download."""
+    
     st.header("Generated Slide Content")
     if not st.session_state.slide_contents or not st.session_state.edited_structure:
         st.warning("No slide content available. Please go back and generate content first.")

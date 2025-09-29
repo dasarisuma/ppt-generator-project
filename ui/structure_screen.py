@@ -2,7 +2,7 @@ import time
 import streamlit as st
 from core.slide_generator import SlideGenerator # Assuming SlideGenerator is in core
 
-def slide_structure_screen():
+def slidestructure_screen():
     """Display the slide structure review and editing screen."""
     st.header("Review and Edit Slide Structure")
 
