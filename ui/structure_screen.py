@@ -2,7 +2,7 @@ import time
 import streamlit as st
 from core.slide_generator import SlideGenerator # Assuming SlideGenerator is in core
 
-def slide_structure_screen():
+def slidestructure_screen():
     """Display the slide structure review and editing screen."""
     st.header("Review and Edit Slide Structure")
 
@@ -187,7 +187,6 @@ def slide_structure_screen():
             else:
                 st.error("Please add at least one slide before generating content.")
 
-# --- Example of how to call this function in your main app ---
 # if __name__ == "__main__":
 #     # Initialize session state variables needed for testing
 #     if 'stage' not in st.session_state:
