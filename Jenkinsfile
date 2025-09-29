@@ -1,21 +1,25 @@
-// Final Working Jenkins Pipeline for PPT Generator with AI Code Review
-// Compatible with all Jenkins versions - No additional plugins required
+// Enhanced Jenkins Pipeline for PPT Generator with Automatic Latest PR Detection
+// Compatible with all Jenkins versions - Automatically reviews the most recent PR
 
 properties([
     buildDiscarder(logRotator(numToKeepStr: '15')),
     parameters([
+        string(name: 'PPT_GENERATOR_REPO_URL', defaultValue: 'https://github.com/dasarisuma/ppt-generator-project.git', description: 'PPT Generator Repository URL'),
         string(name: 'AUTOPR_REPO_URL', defaultValue: 'https://github.com/dasarisuma/AI-based-Code-reviews.git', description: 'AutoPR System Repository URL'),
         string(name: 'AUTOPR_BRANCH', defaultValue: 'test-ai-review', description: 'AutoPR System Branch'),
+        choice(name: 'PR_SELECTION_MODE', choices: ['latest', 'all_open', 'manual'], description: 'How to select PR for review'),
+        string(name: 'MANUAL_PR_NUMBER', defaultValue: '', description: 'Manual PR number (only used if mode is manual)'),
         string(name: 'FAIL_ON', defaultValue: 'critical,error', description: 'Severities that will fail the build'),
         string(name: 'AGENTS', defaultValue: 'security,bug_detection,code_quality', description: 'AI agents to run')
     ])
 ])
 
 node {
-    timeout(time: 30, unit: 'MINUTES') {
+    timeout(time: 45, unit: 'MINUTES') {
         try {
             // Set environment variables
             env.AUTOPR_DIR = "${WORKSPACE}/autopr-system"
+            env.PPT_DIR = "${WORKSPACE}/ppt-generator"
             env.PYTHON_VENV = "${WORKSPACE}/venv"
             
             withCredentials([
@@ -23,60 +27,211 @@ node {
                 string(credentialsId: 'groq-api-key', variable: 'GROQ_API_KEY')
             ]) {
                 
-                stage('Checkout Source Code') {
-                    echo "Checking out PPT Generator source code..."
-                    checkout scm
+                stage('Discover Latest PR') {
+                    echo "🔍 Discovering PRs from PPT Generator repository..."
                     
-                    // Determine if this is a PR or regular branch build
-                    env.IS_PR = env.CHANGE_ID ? 'true' : 'false'
-                    if (env.IS_PR == 'true') {
-                        env.PR_URL = env.CHANGE_URL ?: "https://github.com/dasarisuma/ppt-generator-project/pull/${env.CHANGE_ID}"
-                        echo "PR build detected: ${env.PR_URL} (${env.CHANGE_BRANCH} -> ${env.CHANGE_TARGET})"
+                    // Create a temporary directory for PR discovery
+                    if (isUnix()) {
+                        sh """
+                            rm -rf ppt-temp
+                            git clone ${params.PPT_GENERATOR_REPO_URL} ppt-temp
+                            cd ppt-temp
+                        """
                     } else {
-                        echo "Regular branch build - AI review will use local diff mode"
+                        bat """
+                            if exist ppt-temp rd /s /q ppt-temp
+                            git clone ${params.PPT_GENERATOR_REPO_URL} ppt-temp
+                            cd ppt-temp
+                        """
+                    }
+                    
+                    // Get PR information using GitHub API
+                    script {
+                        def prInfo = ""
+                        def selectedPR = ""
+                        def repoOwner = ""
+                        def repoName = ""
+                        
+                        // Extract owner and repo from URL
+                        def repoUrl = params.PPT_GENERATOR_REPO_URL
+                        def urlParts = repoUrl.replace('https://github.com/', '').replace('.git', '').split('/')
+                        if (urlParts.size() >= 2) {
+                            repoOwner = urlParts[0]
+                            repoName = urlParts[1]
+                        }
+                        
+                        echo "Repository: ${repoOwner}/${repoName}"
+                        
+                        if (params.PR_SELECTION_MODE == 'manual' && params.MANUAL_PR_NUMBER?.trim()) {
+                            selectedPR = params.MANUAL_PR_NUMBER.trim()
+                            echo "📌 Manual PR selection: PR #${selectedPR}"
+                        } else {
+                            // Use GitHub API to get PR information
+                            if (isUnix()) {
+                                prInfo = sh(
+                                    script: """
+                                        echo "Fetching PR information using GitHub API..."
+                                        curl -s -H "Authorization: token ${GITHUB_TOKEN}" \\
+                                             -H "Accept: application/vnd.github.v3+json" \\
+                                             "https://api.github.com/repos/${repoOwner}/${repoName}/pulls?state=open&sort=updated&direction=desc" | \\
+                                        python3 -c "
+import json
+import sys
+try:
+    data = json.load(sys.stdin)
+    if data and len(data) > 0:
+        if '${params.PR_SELECTION_MODE}' == 'latest':
+            # Get the most recently updated PR
+            latest_pr = data[0]
+            print(f'LATEST_PR_NUMBER={latest_pr[\"number\"]}')
+            print(f'LATEST_PR_TITLE={latest_pr[\"title\"]}')
+            print(f'LATEST_PR_BRANCH={latest_pr[\"head\"][\"ref\"]}')
+            print(f'LATEST_PR_BASE={latest_pr[\"base\"][\"ref\"]}')
+            print(f'LATEST_PR_URL={latest_pr[\"html_url\"]}')
+            print(f'LATEST_PR_UPDATED={latest_pr[\"updated_at\"]}')
+        else:
+            # Show all open PRs
+            print('OPEN_PRS_COUNT=' + str(len(data)))
+            for i, pr in enumerate(data[:5]):  # Show first 5 PRs
+                print(f'PR_{i+1}_NUMBER={pr[\"number\"]}')
+                print(f'PR_{i+1}_TITLE={pr[\"title\"]}')
+                print(f'PR_{i+1}_BRANCH={pr[\"head\"][\"ref\"]}')
+                print(f'PR_{i+1}_UPDATED={pr[\"updated_at\"]}')
+    else:
+        print('NO_OPEN_PRS=true')
+except Exception as e:
+    print(f'ERROR_PARSING_PRS={str(e)}')
+"
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                            } else {
+                                prInfo = bat(
+                                    script: """
+                                        @echo off
+                                        echo Fetching PR information using GitHub API...
+                                        curl -s -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${repoOwner}/${repoName}/pulls?state=open&sort=updated&direction=desc" > pr_data.json
+                                        python -c "
+import json
+import sys
+try:
+    with open('pr_data.json', 'r') as f:
+        data = json.load(f)
+    if data and len(data) > 0:
+        if '${params.PR_SELECTION_MODE}' == 'latest':
+            latest_pr = data[0]
+            print(f'LATEST_PR_NUMBER={latest_pr[\"number\"]}')
+            print(f'LATEST_PR_TITLE={latest_pr[\"title\"]}')
+            print(f'LATEST_PR_BRANCH={latest_pr[\"head\"][\"ref\"]}')
+            print(f'LATEST_PR_BASE={latest_pr[\"base\"][\"ref\"]}')
+            print(f'LATEST_PR_URL={latest_pr[\"html_url\"]}')
+            print(f'LATEST_PR_UPDATED={latest_pr[\"updated_at\"]}')
+        else:
+            print('OPEN_PRS_COUNT=' + str(len(data)))
+            for i, pr in enumerate(data[:5]):
+                print(f'PR_{i+1}_NUMBER={pr[\"number\"]}')
+                print(f'PR_{i+1}_TITLE={pr[\"title\"]}')
+                print(f'PR_{i+1}_BRANCH={pr[\"head\"][\"ref\"]}')
+                print(f'PR_{i+1}_UPDATED={pr[\"updated_at\"]}')
+    else:
+        print('NO_OPEN_PRS=true')
+except Exception as e:
+    print(f'ERROR_PARSING_PRS={str(e)}')
+"
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                            }
+                            
+                            echo "PR Discovery Results:"
+                            echo prInfo
+                            
+                            // Parse the results and set environment variables
+                            prInfo.split('\n').each { line ->
+                                if (line.contains('=')) {
+                                    def parts = line.split('=', 2)
+                                    if (parts.size() == 2) {
+                                        env."${parts[0]}" = parts[1]
+                                    }
+                                }
+                            }
+                            
+                            if (env.LATEST_PR_NUMBER) {
+                                selectedPR = env.LATEST_PR_NUMBER
+                                echo "🎯 Auto-selected latest PR: #${selectedPR} - ${env.LATEST_PR_TITLE}"
+                                echo "   Branch: ${env.LATEST_PR_BRANCH} → ${env.LATEST_PR_BASE}"
+                                echo "   Updated: ${env.LATEST_PR_UPDATED}"
+                                echo "   URL: ${env.LATEST_PR_URL}"
+                            } else if (env.NO_OPEN_PRS == 'true') {
+                                error("❌ No open PRs found in the PPT Generator repository. Please create a PR to review.")
+                            } else if (env.ERROR_PARSING_PRS) {
+                                error("❌ Error fetching PR information: ${env.ERROR_PARSING_PRS}")
+                            }
+                        }
+                        
+                        if (!selectedPR) {
+                            error("❌ Could not determine which PR to review. Check your repository and GitHub token permissions.")
+                        }
+                        
+                        // Set the PR URL for the review
+                        env.SELECTED_PR_NUMBER = selectedPR
+                        env.SELECTED_PR_URL = "https://github.com/${repoOwner}/${repoName}/pull/${selectedPR}"
+                        
+                        echo "✅ Selected PR for review: ${env.SELECTED_PR_URL}"
+                    }
+                    
+                    // Clean up temporary directory
+                    if (isUnix()) {
+                        sh "rm -rf ppt-temp"
+                    } else {
+                        bat "if exist ppt-temp rd /s /q ppt-temp"
                     }
                 }
 
-                stage('Setup System Dependencies') {
-                    echo "Setting up system dependencies for Docker container..."
+                stage('Checkout PPT Generator PR') {
+                    echo "📥 Checking out PPT Generator PR #${env.SELECTED_PR_NUMBER}..."
+                    
                     if (isUnix()) {
-                        sh '''
-                            echo "=== Python Environment Check ==="
-                            python3 --version || echo "Python3 not found"
-                            python3 -m pip --version || echo "Pip not found"
-                            
-                            echo "=== Installing Required System Packages ==="
-                            if command -v apt-get >/dev/null 2>&1; then
-                                echo "Using apt package manager..."
-                                apt-get update -qq >/dev/null 2>&1 || echo "apt update failed (might need root)"
-                                apt-get install -y python3-venv python3-full python3-pip >/dev/null 2>&1 || echo "apt install attempted"
-                            elif command -v yum >/dev/null 2>&1; then
-                                echo "Using yum package manager..."
-                                yum update -y -q >/dev/null 2>&1 || echo "yum update failed"
-                                yum install -y python3-venv python3-pip >/dev/null 2>&1 || echo "yum install attempted"
-                            elif command -v apk >/dev/null 2>&1; then
-                                echo "Using apk package manager (Alpine)..."
-                                apk update >/dev/null 2>&1 || echo "apk update failed"
-                                apk add python3-dev py3-pip py3-venv >/dev/null 2>&1 || echo "apk install attempted"
-                            else
-                                echo "No known package manager found"
+                        sh """
+                            if [ -d "${env.PPT_DIR}" ]; then
+                                rm -rf "${env.PPT_DIR}"
                             fi
                             
-                            echo "=== Post-Install Verification ==="
-                            python3 -m venv --help >/dev/null 2>&1 && echo "✓ venv is available" || echo "✗ venv still not available"
-                            python3 -m pip --version >/dev/null 2>&1 && echo "✓ pip is available" || echo "✗ pip not available"
-                        '''
+                            # Clone the repository
+                            git clone ${params.PPT_GENERATOR_REPO_URL} "${env.PPT_DIR}"
+                            cd "${env.PPT_DIR}"
+                            
+                            # Fetch the PR
+                            git fetch origin pull/${env.SELECTED_PR_NUMBER}/head:pr-${env.SELECTED_PR_NUMBER}
+                            git checkout pr-${env.SELECTED_PR_NUMBER}
+                            
+                            echo "✅ Successfully checked out PR #${env.SELECTED_PR_NUMBER}"
+                            echo "Current commit:"
+                            git log --oneline -1
+                            echo "Files changed:"
+                            git diff --name-only HEAD~1 || echo "No changes detected"
+                        """
                     } else {
-                        bat '''
-                            echo "Windows environment detected - system packages should be available"
-                            python --version || echo "Python not found"
-                            pip --version || echo "Pip not found" 
-                        '''
+                        bat """
+                            if exist "${env.PPT_DIR}" rd /s /q "${env.PPT_DIR}"
+                            
+                            git clone ${params.PPT_GENERATOR_REPO_URL} "${env.PPT_DIR}"
+                            cd "${env.PPT_DIR}"
+                            
+                            git fetch origin pull/${env.SELECTED_PR_NUMBER}/head:pr-${env.SELECTED_PR_NUMBER}
+                            git checkout pr-${env.SELECTED_PR_NUMBER}
+                            
+                            echo "✅ Successfully checked out PR #${env.SELECTED_PR_NUMBER}"
+                            echo "Current commit:"
+                            git log --oneline -1
+                            echo "Files changed:"
+                            git diff --name-only HEAD~1 || echo "No changes detected"
+                        """
                     }
                 }
 
                 stage('Setup AutoPR System') {
-                    echo "Cloning AutoPR AI Review System..."
+                    echo "🤖 Setting up AutoPR AI Review System..."
                     if (isUnix()) {
                         sh """
                             if [ -d "${env.AUTOPR_DIR}" ]; then
@@ -91,39 +246,23 @@ node {
                         """
                     }
                     
-                    echo "Setting up Python environment for AI review..."
+                    echo "🐍 Setting up Python environment for AI review..."
                     if (isUnix()) {
                         sh '''
                             cd "${AUTOPR_DIR}/backend"
                             echo "Current directory: $(pwd)"
-                            echo "Requirements file check:"
-                            ls -la requirements.txt || echo "requirements.txt not found"
                             
                             echo "=== Virtual Environment Setup ==="
                             if python3 -m venv "${PYTHON_VENV}" >/dev/null 2>&1; then
-                                echo "✓ Virtual environment created successfully with python3 -m venv"
+                                echo "✓ Virtual environment created successfully"
                                 VENV_CREATED=true
                                 VENV_ACTIVATE="${PYTHON_VENV}/bin/activate"
                             else
-                                echo "✗ python3 -m venv failed"
-                                VENV_CREATED=false
-                            fi
-                            
-                            if [ "$VENV_CREATED" = false ] && command -v virtualenv >/dev/null 2>&1; then
-                                echo "Trying virtualenv..."
-                                if virtualenv "${PYTHON_VENV}" >/dev/null 2>&1; then
-                                    echo "✓ Virtual environment created with virtualenv"
-                                    VENV_CREATED=true
-                                    VENV_ACTIVATE="${PYTHON_VENV}/bin/activate"
-                                fi
-                            fi
-                            
-                            if [ "$VENV_CREATED" = false ]; then
-                                echo "⚠️  Using --break-system-packages as fallback (Docker container safe)"
+                                echo "⚠️  Using --break-system-packages as fallback"
                                 python3 -m pip install --break-system-packages --upgrade pip
                                 python3 -m pip install --break-system-packages -r requirements.txt
-                                VENV_ACTIVATE=""
-                                echo "✓ Packages installed globally with --break-system-packages"
+                                VENV_CREATED=false
+                                echo "✓ Packages installed globally"
                             fi
                             
                             if [ "$VENV_CREATED" = true ] && [ -f "$VENV_ACTIVATE" ]; then
@@ -134,261 +273,251 @@ node {
                                 echo "✓ Dependencies installed in virtual environment"
                             fi
                             
-                            echo "=== Environment Setup Complete ==="
-                            if [ "$VENV_CREATED" = true ]; then
-                                echo "Using virtual environment at: ${PYTHON_VENV}"
-                            else
-                                echo "Using global Python installation with --break-system-packages"
-                            fi
+                            echo "=== Python Environment Ready ==="
                         '''
                     } else {
                         bat """
                             cd "${env.AUTOPR_DIR}\\backend"
                             python --version
                             
-                            if not exist "${env.PYTHON_VENV}" (
-                                python -m venv "${env.PYTHON_VENV}" || echo "Virtual env creation failed, using global"
-                            )
-                            
+                            python -m venv "${env.PYTHON_VENV}" || echo "Using global Python"
                             if exist "${env.PYTHON_VENV}\\Scripts\\activate.bat" (
                                 "${env.PYTHON_VENV}\\Scripts\\activate.bat" && pip install --upgrade pip && pip install -r requirements.txt
                             ) else (
-                                pip install --upgrade pip && pip install -r requirements.txt
+                                pip install --upgrade pip
+                                pip install -r requirements.txt
                             )
                         """
                     }
                 }
 
-                stage('AI Code Review') {
-                    echo "Running AI-powered code review..."
+                stage('Run AI Code Review') {
+                    echo "🔍 Running AI-powered code review on PR #${env.SELECTED_PR_NUMBER}..."
+                    
                     if (isUnix()) {
-                        sh '''
-                            cd "${AUTOPR_DIR}/backend"
+                        sh """
+                            cd "${env.AUTOPR_DIR}/backend"
                             
-                            export PYTHONPATH="${AUTOPR_DIR}/backend:${PYTHONPATH}"
-                            
-                            if [ -f "${PYTHON_VENV}/bin/activate" ]; then
-                                echo "✓ Using virtual environment"
-                                . "${PYTHON_VENV}/bin/activate"
-                                PYTHON_CMD="python"
+                            # Activate virtual environment if it exists
+                            if [ -f "${env.PYTHON_VENV}/bin/activate" ]; then
+                                . "${env.PYTHON_VENV}/bin/activate"
+                                echo "Using virtual environment"
                             else
-                                echo "✓ Using global Python installation"
-                                PYTHON_CMD="python3"
+                                echo "Using global Python installation"
                             fi
                             
-                            echo "Python command: $PYTHON_CMD"
-                            $PYTHON_CMD --version
+                            export PYTHONPATH="${env.AUTOPR_DIR}/backend:\${PYTHONPATH}"
                             
-                            echo "Checking key dependencies..."
-                            $PYTHON_CMD -c "import requests; print('✓ requests available')" || echo "✗ requests missing"
-                            $PYTHON_CMD -c "import json; print('✓ json available')" || echo "✗ json missing"
+                            echo "Running AI review for PR: ${env.SELECTED_PR_URL}"
+                            echo "Using agents: ${params.AGENTS}"
+                            echo "Fail on severities: ${params.FAIL_ON}"
                             
-                            export PATH="/var/jenkins_home/.local/bin:$PATH"
+                            python scripts/run_review.py \\
+                                --pr-url "${env.SELECTED_PR_URL}" \\
+                                --github-token "${GITHUB_TOKEN}" \\
+                                --agents "${params.AGENTS}" \\
+                                --fail-on "${params.FAIL_ON}" \\
+                                --output "${WORKSPACE}/ai-review-results.json" \\
+                                --project-root "${env.PPT_DIR}" \\
+                                --verbose
                             
-                            echo "=== Starting AI Code Review ==="
-                            if [ "${IS_PR}" = "true" ]; then
-                                echo "Running PR mode review..."
-                                cd "${WORKSPACE}"
-                                git fetch origin ${CHANGE_TARGET}:refs/remotes/origin/${CHANGE_TARGET} || echo "Could not fetch target branch"
-                                cd "${AUTOPR_DIR}/backend"
-                                $PYTHON_CMD scripts/run_review.py \\
-                                    --pr-url "${PR_URL}" \\
-                                    --github-token "${GITHUB_TOKEN}" \\
-                                    --agents "${AGENTS}" \\
-                                    --fail-on "${FAIL_ON}" \\
-                                    --output "${WORKSPACE}/ai-review-results.json"
-                            else
-                                echo "Running local diff mode review..."
-                                cd "${WORKSPACE}"
-                                git fetch origin main:refs/remotes/origin/main || git fetch origin master:refs/remotes/origin/master || echo "No main/master branch found"
-                                
-                                cd "${AUTOPR_DIR}/backend"
-                                $PYTHON_CMD scripts/run_review.py \\
-                                    --base-ref origin/main \\
-                                    --head-ref HEAD \\
-                                    --local-diff \\
-                                    --agents "${AGENTS}" \\
-                                    --fail-on "${FAIL_ON}" \\
-                                    --output "${WORKSPACE}/ai-review-results.json"
-                            fi
-                            
-                            echo "=== AI Code Review Complete ==="
-                        '''
+                            echo "✅ AI Code Review completed"
+                        """
                     } else {
                         bat """
                             cd "${env.AUTOPR_DIR}\\backend"
                             
-                            set PYTHONPATH=${env.AUTOPR_DIR}\\backend;%PYTHONPATH%
-                            
                             if exist "${env.PYTHON_VENV}\\Scripts\\activate.bat" (
                                 "${env.PYTHON_VENV}\\Scripts\\activate.bat"
+                                echo "Using virtual environment"
+                            ) else (
+                                echo "Using global Python installation"
                             )
                             
-                            if "${env.IS_PR}"=="true" (
-                                python scripts\\run_review.py --pr-url "${env.PR_URL}" --github-token "${env.GITHUB_TOKEN}" --agents "${params.AGENTS}" --fail-on "${params.FAIL_ON}" --output "${WORKSPACE}\\ai-review-results.json"
-                            ) else (
-                                cd "${WORKSPACE}"
-                                git fetch origin main:refs/remotes/origin/main || git fetch origin master:refs/remotes/origin/master || echo "No main/master branch"
-                                
-                                cd "${env.AUTOPR_DIR}\\backend"
-                                python scripts\\run_review.py --base-ref origin/main --head-ref HEAD --local-diff --agents "${params.AGENTS}" --fail-on "${params.FAIL_ON}" --output "${WORKSPACE}\\ai-review-results.json"
-                            )
+                            set PYTHONPATH=${env.AUTOPR_DIR}\\backend;%PYTHONPATH%
+                            
+                            echo "Running AI review for PR: ${env.SELECTED_PR_URL}"
+                            echo "Using agents: ${params.AGENTS}"
+                            echo "Fail on severities: ${params.FAIL_ON}"
+                            
+                            python scripts\\run_review.py --pr-url "${env.SELECTED_PR_URL}" --github-token "%GITHUB_TOKEN%" --agents "${params.AGENTS}" --fail-on "${params.FAIL_ON}" --output "${WORKSPACE}\\ai-review-results.json" --project-root "${env.PPT_DIR}" --verbose
+                            
+                            echo "✅ AI Code Review completed"
                         """
                     }
                 }
 
                 stage('Process Review Results') {
-                    if (fileExists('ai-review-results.json')) {
-                        echo "✅ AI review completed successfully!"
+                    echo "📊 Processing AI review results..."
+                    script {
+                        def resultsFile = "${WORKSPACE}/ai-review-results.json"
                         
-                        // Read and display results without JSON parsing
-                        def reviewContent = readFile('ai-review-results.json')
-                        echo "=== AI CODE REVIEW RESULTS ==="
-                        echo reviewContent
-                        
-                        // Simple text-based check for blocking issues
-                        def failOnParam = params.FAIL_ON.toLowerCase()
-                        def blockingSeverities = failOnParam.split(',').collect { it.trim() }
-                        
-                        def hasBlockingIssues = false
-                        for (severity in blockingSeverities) {
-                            if (reviewContent.toLowerCase().contains("\"severity\": \"${severity}\"") || 
-                                reviewContent.toLowerCase().contains("\"severity\":\"${severity}\"")) {
-                                hasBlockingIssues = true
-                                echo "⚠️ Found blocking severity: ${severity}"
-                                break
+                        if (fileExists(resultsFile)) {
+                            def results
+                            if (isUnix()) {
+                                results = sh(
+                                    script: "cat '${resultsFile}'",
+                                    returnStdout: true
+                                ).trim()
+                            } else {
+                                results = bat(
+                                    script: "@type \"${resultsFile}\"",
+                                    returnStdout: true
+                                ).trim()
                             }
-                        }
-                        
-                        if (hasBlockingIssues) {
-                            echo "❌ BLOCKING ISSUES FOUND!"
-                            echo "Found severities that are configured to fail the build: ${blockingSeverities.join(', ')}"
-                            error("AI Code Review found blocking issues. Build failed.")
+                            
+                            echo "=== AI CODE REVIEW RESULTS FOR PR #${env.SELECTED_PR_NUMBER} ==="
+                            echo results
+                            echo "================================================================="
+                            
+                            // Archive results
+                            archiveArtifacts artifacts: 'ai-review-results.json', allowEmptyArchive: true
+                            
+                            // Parse results for build decision
+                            try {
+                                def jsonSlurper = new groovy.json.JsonSlurper()
+                                def reviewData = jsonSlurper.parseText(results)
+                                
+                                def hasCriticalIssues = false
+                                def hasErrorIssues = false
+                                def hasWarningIssues = false
+                                def totalIssues = 0
+                                def issuesSummary = [:]
+                                
+                                if (reviewData.results) {
+                                    reviewData.results.each { agentResult ->
+                                        if (agentResult.issues) {
+                                            agentResult.issues.each { issue ->
+                                                totalIssues++
+                                                def severity = issue.severity
+                                                issuesSummary[severity] = (issuesSummary[severity] ?: 0) + 1
+                                                
+                                                if (severity == 'critical') {
+                                                    hasCriticalIssues = true
+                                                } else if (severity == 'error') {
+                                                    hasErrorIssues = true
+                                                } else if (severity == 'warning') {
+                                                    hasWarningIssues = true
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                echo "📈 REVIEW SUMMARY FOR PR #${env.SELECTED_PR_NUMBER}:"
+                                echo "   Total issues found: ${totalIssues}"
+                                echo "   Critical: ${issuesSummary.critical ?: 0}"
+                                echo "   Error: ${issuesSummary.error ?: 0}" 
+                                echo "   Warning: ${issuesSummary.warning ?: 0}"
+                                echo "   Info: ${issuesSummary.info ?: 0}"
+                                
+                                // Determine if build should fail
+                                def shouldFail = false
+                                def failReason = ""
+                                
+                                if (params.FAIL_ON.contains('critical') && hasCriticalIssues) {
+                                    shouldFail = true
+                                    failReason = "Critical issues found (${issuesSummary.critical} critical issues)"
+                                } else if (params.FAIL_ON.contains('error') && hasErrorIssues) {
+                                    shouldFail = true
+                                    failReason = "Error issues found (${issuesSummary.error} error issues)"
+                                } else if (params.FAIL_ON.contains('warning') && hasWarningIssues) {
+                                    shouldFail = true
+                                    failReason = "Warning issues found (${issuesSummary.warning} warning issues)"
+                                }
+                                
+                                if (shouldFail) {
+                                    currentBuild.result = 'FAILURE'
+                                    echo "❌ BUILD WILL FAIL: ${failReason}"
+                                    echo "   Please address the issues in PR #${env.SELECTED_PR_NUMBER}"
+                                    error("AI Code Review found blocking issues: ${failReason}")
+                                } else {
+                                    echo "✅ AI Code Review passed - no blocking issues found"
+                                    echo "   PR #${env.SELECTED_PR_NUMBER} can proceed to build"
+                                }
+                                
+                            } catch (Exception e) {
+                                echo "⚠️  Warning: Could not parse review results JSON: ${e.message}"
+                                echo "Raw results have been archived for manual review"
+                                currentBuild.result = 'UNSTABLE'
+                            }
                         } else {
-                            echo "✅ No blocking issues found. Build can proceed."
+                            echo "❌ Warning: No review results file found"
+                            currentBuild.result = 'UNSTABLE'
                         }
-                    } else {
-                        echo "⚠️ WARNING: No review results file found."
-                        currentBuild.result = 'UNSTABLE'
                     }
                 }
 
                 stage('Build PPT Generator') {
-                    if (currentBuild.result != 'FAILURE') {
-                        echo "Building PPT Generator application..."
-                        if (isUnix()) {
-                            sh '''
-                                echo "=== PPT Generator Build ==="
+                    when {
+                        expression { currentBuild.result != 'FAILURE' }
+                    }
+                    steps {
+                        echo "🏗️ Building PPT Generator from PR #${env.SELECTED_PR_NUMBER}..."
+                        script {
+                            dir(env.PPT_DIR) {
+                                // Check for different build systems and build accordingly
+                                if (fileExists('requirements.txt')) {
+                                    echo "📦 Found Python project - installing dependencies"
+                                    if (isUnix()) {
+                                        sh """
+                                            if [ -f "${env.PYTHON_VENV}/bin/activate" ]; then
+                                                . "${env.PYTHON_VENV}/bin/activate"
+                                            fi
+                                            pip install -r requirements.txt
+                                            echo "✅ Python dependencies installed"
+                                        """
+                                    } else {
+                                        bat """
+                                            if exist "${env.PYTHON_VENV}\\Scripts\\activate.bat" (
+                                                "${env.PYTHON_VENV}\\Scripts\\activate.bat" && pip install -r requirements.txt
+                                            ) else (
+                                                pip install -r requirements.txt
+                                            )
+                                            echo "✅ Python dependencies installed"
+                                        """
+                                    }
+                                }
                                 
-                                if python3 -m venv ppt-venv >/dev/null 2>&1; then
-                                    echo "✓ Virtual environment created for PPT generator"
-                                    . ppt-venv/bin/activate
-                                    pip install --upgrade pip
-                                    pip install -r requirements.txt
-                                    PYTHON_CMD="python"
-                                else
-                                    echo "⚠️ Using global Python with --break-system-packages for PPT generator"
-                                    python3 -m pip install --break-system-packages --upgrade pip
-                                    python3 -m pip install --break-system-packages -r requirements.txt
-                                    PYTHON_CMD="python3"
-                                fi
+                                if (fileExists('package.json')) {
+                                    echo "📦 Found Node.js project - installing dependencies"
+                                    if (isUnix()) {
+                                        sh 'npm install && echo "✅ Node.js dependencies installed"'
+                                    } else {
+                                        bat 'npm install && echo "✅ Node.js dependencies installed"'
+                                    }
+                                }
                                 
-                                if [ -f "test_app.py" ]; then
-                                    echo "Running tests..."
-                                    $PYTHON_CMD -m pytest test_app.py -v || echo "Tests completed with issues"
-                                else
-                                    echo "No tests found, skipping test execution"
-                                fi
+                                if (fileExists('Dockerfile')) {
+                                    echo "🐳 Found Dockerfile - Docker build available"
+                                }
                                 
-                                echo "✅ Build completed successfully!"
-                            '''
-                        } else {
-                            bat """
-                                echo "Setting up PPT Generator environment on Windows..."
-                                
-                                if not exist "ppt-venv" (
-                                    python -m venv ppt-venv || echo "Virtual env creation failed, using global"
-                                )
-                                
-                                if exist "ppt-venv\\Scripts\\activate.bat" (
-                                    ppt-venv\\Scripts\\activate.bat && pip install --upgrade pip && pip install -r requirements.txt
-                                ) else (
-                                    pip install --upgrade pip && pip install -r requirements.txt
-                                )
-                                
-                                if exist "test_app.py" (
-                                    if exist "ppt-venv\\Scripts\\activate.bat" (
-                                        ppt-venv\\Scripts\\activate.bat && python -m pytest test_app.py -v || echo "Tests completed"
-                                    ) else (
-                                        python -m pytest test_app.py -v || echo "Tests completed"
-                                    )
-                                )
-                                
-                                echo Build completed successfully!
-                            """
+                                echo "✅ Build stage completed successfully for PR #${env.SELECTED_PR_NUMBER}"
+                            }
                         }
                     }
                 }
             }
+            
         } catch (Exception e) {
+            echo "❌ Pipeline failed with error: ${e.message}"
             currentBuild.result = 'FAILURE'
-            echo "❌ FAILURE: Pipeline failed with error: ${e.getMessage()}"
             throw e
-        } finally {
-            // Cleanup
-            echo "Cleaning up workspace..."
-            try {
-                if (isUnix()) {
-                    sh '''
-                        echo "=== Cleanup ==="
-                        rm -rf "${AUTOPR_DIR}" || echo "AutoPR cleanup done"
-                        rm -rf "${PYTHON_VENV}" || echo "Python venv cleanup done"  
-                        rm -rf "ppt-venv" || echo "PPT venv cleanup done"
-                        echo "✓ Cleanup completed"
-                    '''
-                } else {
-                    bat """
-                        echo Cleaning up directories...
-                        if exist "${env.AUTOPR_DIR}" rd /s /q "${env.AUTOPR_DIR}" || echo "AutoPR cleanup done"
-                        if exist "${env.PYTHON_VENV}" rd /s /q "${env.PYTHON_VENV}" || echo "Python venv cleanup done"
-                        if exist "ppt-venv" rd /s /q "ppt-venv" || echo "PPT venv cleanup done"
-                        echo Cleanup completed
-                    """
-                }
-            } catch (Exception cleanupError) {
-                echo "Cleanup completed with minor issues: ${cleanupError.getMessage()}"
-            }
-            
-            // Archive artifacts (simple version without fingerprinting)
-            try {
-                if (fileExists('ai-review-results.json')) {
-                    archiveArtifacts artifacts: 'ai-review-results.json', allowEmptyArchive: true
-                }
-            } catch (Exception archiveError) {
-                echo "Could not archive artifacts: ${archiveError.getMessage()}"
-            }
-            
-            // Final status messages
-            if (currentBuild.result == 'SUCCESS' || currentBuild.result == null) {
-                echo "🎉 SUCCESS: Pipeline completed successfully!"
-                echo "✅ AI Code Review passed - no blocking issues found."
-            } else if (currentBuild.result == 'FAILURE') {
-                echo "❌ FAILURE: Pipeline failed!"
-                if (fileExists('ai-review-results.json')) {
-                    try {
-                        def reviewContent = readFile('ai-review-results.json')
-                        echo "Failure due to AI code review findings:"
-                        echo reviewContent
-                    } catch (Exception e) {
-                        echo "Could not process review results for failure analysis: ${e.getMessage()}"
-                    }
-                } else {
-                    echo "Pipeline failed due to system/environment error (not AI review)"
-                }
-            } else if (currentBuild.result == 'UNSTABLE') {
-                echo "⚠️ UNSTABLE: Pipeline completed with warnings."
-                echo "Check the AI review results for non-blocking issues."
-            }
         }
     }
+}
+
+// Post-build actions
+if (currentBuild.result == 'SUCCESS') {
+    echo "🎉 SUCCESS: PR #${env.SELECTED_PR_NUMBER} passed AI review and built successfully!"
+    echo "   Review results: ${WORKSPACE}/ai-review-results.json"
+    echo "   PR URL: ${env.SELECTED_PR_URL}"
+} else if (currentBuild.result == 'FAILURE') {
+    echo "💥 FAILURE: PR #${env.SELECTED_PR_NUMBER} failed AI review or build"
+    echo "   Check the AI Code Review results for issues to address"
+    echo "   PR URL: ${env.SELECTED_PR_URL}"
+} else {
+    echo "⚠️  UNSTABLE: Pipeline completed with warnings"
+    echo "   PR #${env.SELECTED_PR_NUMBER} may need attention"
+    echo "   PR URL: ${env.SELECTED_PR_URL}"
 }
