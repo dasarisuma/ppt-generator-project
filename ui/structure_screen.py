@@ -187,7 +187,6 @@ def slidestructure_screen():
             else:
                 st.error("Please add at least one slide before generating content.")
 
-# --- Example of how to call this function in your main app ---
 # if __name__ == "__main__":
 #     # Initialize session state variables needed for testing
 #     if 'stage' not in st.session_state:
